@@ -1,32 +1,15 @@
-import { NotificationChannel } from "./notification-channel";
+import type { NotificationChannel } from "../../../types";
 
-export interface NotificationPayload {
-  title?: string;
-
-  message: string;
-
-  subject?: string;
-
-  html?: string;
-
-  metadata?: Record<string, unknown>;
-}
-
-export interface NotificationRecipient {
-  telegramId?: string;
-
-  email?: string;
-
-  phone?: string;
-
-  vkId?: string;
-}
+import type {
+  NotificationRecipient,
+  NotificationPayload,
+} from "./notification.types";
 
 export interface NotificationProvider {
   readonly channel: NotificationChannel;
 
   send(
     recipient: NotificationRecipient,
-    payload: NotificationPayload
+    payload: NotificationPayload,
   ): Promise<void>;
 }

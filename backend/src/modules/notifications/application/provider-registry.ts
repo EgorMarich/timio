@@ -1,11 +1,8 @@
-import { NotificationChannel } from "../domain/notification-channel";
-import { NotificationProvider } from "../domain/notification-provider";
+import { NotificationChannel } from '../../../types';
+import { NotificationProvider } from '../domain/notification-provider';
 
 export class ProviderRegistry {
-  private providers = new Map<
-    NotificationChannel,
-    NotificationProvider
-  >();
+  private providers = new Map<NotificationChannel, NotificationProvider>();
 
   register(provider: NotificationProvider) {
     this.providers.set(provider.channel, provider);
