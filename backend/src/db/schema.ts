@@ -35,7 +35,39 @@ export const notificationEventEnum = pgEnum('notification_event', [
   'appointment.reminder.15m',
   'visit.completed',
   'review.request',
+  'waitlist.invite',
+  'waitlist.expired',
+  'waitlist.confirmed',
 ]);
+
+export const campaignStatusEnum = pgEnum('campaign_status', [
+  'sending',
+  'sent',
+  'failed',
+]);
+
+export const campaigns = pgTable('campaigns', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id')
+    .notNull()
+    .references(() => businesses.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  message: text('message').notNull(),
+  filters: jsonb('filters')
+    .$type<{
+      segment: 'all' | 'inactive' | 'by_tag' | 'top_clients' | 'new_clients';
+      inactiveDays?: number;
+      tag?: string;         
+      visitsGte?: number;   
+    }>()
+    .notNull(),
+  channel: varchar('channel', { length: 20 }).notNull().default('telegram'),
+  status: campaignStatusEnum('status').notNull().default('sending'),
+  recipientCount: integer('recipient_count').notNull().default(0),
+  sentCount: integer('sent_count').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  sentAt: timestamp('sent_at'),
+});
 
 export const notificationDeliveryStatusEnum = pgEnum('notification_delivery_status', [
   'pending',
@@ -235,6 +267,42 @@ export const notificationLogs = pgTable('notification_logs', {
 
   error: text('error'),
   locale: varchar('locale', { length: 5 }).notNull(),
+});
+
+// ================================================================
+// Модуль Waitlist
+// ================================================================
+
+export const waitlistStatusEnum = pgEnum('waitlist_status', [
+  'active',    // ожидает приглашения
+  'invited',   // приглашён, слот в холде
+  'claimed',   // подтвердил и занял
+  'expired',   // приглашение истекло
+  'cancelled', // отменено вручную
+]);
+
+export const waitlistEntries = pgTable('waitlist_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  businessId: uuid('business_id')
+    .notNull()
+    .references(() => businesses.id, { onDelete: 'cascade' }),
+  clientId: uuid('client_id')
+    .notNull()
+    .references(() => clients.id, { onDelete: 'cascade' }),
+  serviceId: uuid('service_id')
+    .notNull()
+    .references(() => services.id, { onDelete: 'cascade' }),
+  // null = "любой сотрудник"
+  staffId: uuid('staff_id').references(() => staff.id, { onDelete: 'cascade' }),
+  startAt: timestamp('start_at').notNull(),
+  endAt: timestamp('end_at').notNull(),
+  status: waitlistStatusEnum('status').notNull().default('active'),
+  confirmationToken: varchar('confirmation_token', { length: 64 }).notNull().unique(),
+  inviteSentAt: timestamp('invite_sent_at'),
+  holdExpiresAt: timestamp('hold_expires_at'),
+  channelAttempts: jsonb('channel_attempts').$type<string[]>().notNull().default([]),
+  priority: integer('priority').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 // ================================================================
