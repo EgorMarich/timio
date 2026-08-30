@@ -13,6 +13,48 @@ export interface OwnedBusiness {
   myRole?: string;
 }
 
+export interface OwnedMember {
+  id: string;
+  userId: string;
+  role: string;
+  name: string;
+  email: string;
+}
+
+export interface OwnedTemplate {
+  id: string;
+  businessId: string;
+  type: string;
+  translations: Record<string, string>;
+}
+
+export interface OwnedClientCard {
+  client: {
+    id: string;
+    name: string;
+    phone: string | null;
+    email: string | null;
+    telegramChatId: string | null;
+    detectedLocale: string;
+    tags: string[];
+    notes: string[];
+    totalSpentCents: number;
+    visits: number;
+    lastVisitAt: string | null;
+    createdAt: string;
+  };
+  appointments: {
+    id: string;
+    startAt: string;
+    endAt: string;
+    status: string;
+    serviceName: string;
+    staffName: string;
+    priceCents: number;
+    currency: string;
+  }[];
+}
+
 export interface OwnedService {
   id: string;
   businessId: string;
@@ -77,6 +119,39 @@ export interface AnalyticsResponse {
   }[];
 }
 
+export type CampaignSegment = 'all' | 'inactive' | 'by_tag' | 'top_clients' | 'new_clients';
+
+export interface CampaignFilters {
+  segment: CampaignSegment;
+  inactiveDays?: number;
+  tag?: string;
+  visitsGte?: number;
+}
+
+export interface Campaign {
+  id: string;
+  businessId: string;
+  name: string;
+  message: string;
+  filters: CampaignFilters;
+  channel: string;
+  status: 'sending' | 'sent' | 'failed';
+  recipientCount: number;
+  sentCount: number;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export interface CampaignPreview {
+  count: number;
+  sample: { id: string; name: string }[];
+}
+
+export interface CampaignSendResult {
+  campaign: Campaign;
+  result: { total: number; sent: number; failed: number };
+}
+
 // ---- Модуль подписок (дописано, существующие типы выше не менялись) ----
 
 export type SubscriptionPlanId = "basic" | "business";
@@ -135,6 +210,58 @@ export function useTimioAuthApi() {
     async me() {
       return await call<{ user: any }>("/auth/me");
     },
+
+    async updateAppointmentStatus(businessId: string, apptId: string, status: string) {
+  return await call<{ appointment: OwnedAppointment }>(
+    `/me/businesses/${businessId}/appointments/${apptId}`,
+    { method: "PATCH", body: { status } }
+  );
+},
+
+  // ---- Шаблоны уведомлений ----
+  async listTemplates(businessId: string) {
+    return await call<{ templates: OwnedTemplate[] }>(
+      `/me/businesses/${businessId}/templates`
+    );
+  },
+  async updateTemplate(businessId: string, type: string, translations: Record<string, string>) {
+    return await call<{ template: OwnedTemplate }>(
+      `/me/businesses/${businessId}/templates/${type}`,
+      { method: "PATCH", body: { translations } }
+    );
+  },
+
+  // ---- Команда бизнеса ----
+  async listMembers(businessId: string) {
+    return await call<{ members: OwnedMember[] }>(
+      `/me/businesses/${businessId}/members`
+    );
+  },
+  async addMember(businessId: string, email: string, role?: string) {
+    return await call<{ member: OwnedMember }>(
+      `/me/businesses/${businessId}/members`,
+      { method: "POST", body: { email, role } }
+    );
+  },
+  async removeMember(businessId: string, memberId: string) {
+    return await call(
+      `/me/businesses/${businessId}/members/${memberId}`,
+      { method: "DELETE" }
+    );
+  },
+
+  // ---- CRM: карточка клиента (полная, с сервера) ----
+  async getClientCard(businessId: string, clientId: string) {
+    return await call<OwnedClientCard>(
+      `/me/businesses/${businessId}/clients/${clientId}`
+    );
+  },
+  async updateClientCrm(businessId: string, clientId: string, input: { tags?: string[]; notes?: string[] }) {
+    return await call<{ client: OwnedClientCard["client"] }>(
+      `/me/businesses/${businessId}/clients/${clientId}`,
+      { method: "PATCH", body: input }
+    );
+  },
 
     async listBusinesses() {
       return await call<{ businesses: OwnedBusiness[] }>("/me/businesses");
@@ -232,6 +359,27 @@ export function useTimioAuthApi() {
     },
     async disconnectTelegramBot(businessId: string) {
       return await call<{ connected: boolean }>(`/me/businesses/${businessId}/telegram`, { method: "DELETE" });
+    },
+
+    async listCampaigns(businessId: string) {
+      return await call<{ campaigns: Campaign[] }>(
+        `/me/businesses/${businessId}/campaigns`
+      );
+    },
+    async previewCampaign(businessId: string, filters: CampaignFilters) {
+      return await call<CampaignPreview>(
+        `/me/businesses/${businessId}/campaigns/preview`,
+        { method: "POST", body: { filters } }
+      );
+    },
+    async sendCampaign(
+      businessId: string,
+      input: { name: string; message: string; filters: CampaignFilters }
+    ) {
+      return await call<CampaignSendResult>(
+        `/me/businesses/${businessId}/campaigns/send`,
+        { method: "POST", body: input }
+      );
     },
   };
 }

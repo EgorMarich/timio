@@ -29,7 +29,7 @@ const staff = ref<OwnedStaff[]>([]);
 const appointments = ref<OwnedAppointment[]>([]);
 const status = ref<"loading" | "ready" | "error">("loading");
 
-type Tab = "overview" | "appointments" | "archive" | "services" | "staff" | "analytics" | "billing" | "settings";
+type Tab = "overview" | "appointments" | "archive" | "services" | "staff" | "analytics" | "billing" | "templates" | "team" | "campaigns" | "settings";
 const tab = ref<Tab>("overview");
 
 async function loadAll() {
@@ -137,6 +137,156 @@ function formatDateTime(iso: string) {
 function formatMoney(cents: number, currency = "") {
   return `${(cents / 100).toFixed(0)} ${currency}`.trim();
 }
+
+// ---- Смена статуса записи ----
+const statusOptions = ["booked", "confirmed", "completed", "cancelled", "no_show"] as const;
+
+async function changeAppointmentStatus(apptId: string, newStatus: string) {
+  await api.updateAppointmentStatus(businessId, apptId, newStatus);
+  // Обновляем локально — не перезапрашиваем весь список
+  const idx = appointments.value.findIndex((a) => a.id === apptId);
+  if (idx !== -1) appointments.value[idx] = { ...appointments.value[idx], status: newStatus };
+}
+
+// ---- Шаблоны уведомлений ----
+import type { OwnedTemplate } from "../../../composables/useTimioAuthApi";
+
+const templates = ref<OwnedTemplate[]>([]);
+const templatesStatus = ref<"idle" | "loading" | "ready" | "error">("idle");
+// Черновики переводов: { [templateType]: { [locale]: text } }
+const templateDrafts = reactive<Record<string, Record<string, string>>>({});
+const templateSaving = reactive<Record<string, boolean>>({});
+
+const LOCALES = ["ru", "en", "es", "it", "fr", "kk", "hy"] as const;
+
+async function loadTemplates() {
+  templatesStatus.value = "loading";
+  try {
+    const res = await api.listTemplates(businessId);
+    templates.value = res.templates;
+    // Инициализируем черновики из текущих переводов
+    for (const t of res.templates) {
+      templateDrafts[t.type] = { ...t.translations };
+    }
+    templatesStatus.value = "ready";
+  } catch {
+    templatesStatus.value = "error";
+  }
+}
+
+async function saveTemplate(type: string) {
+  templateSaving[type] = true;
+  try {
+    const res = await api.updateTemplate(businessId, type, templateDrafts[type]);
+    const idx = templates.value.findIndex((t) => t.type === type);
+    if (idx !== -1) templates.value[idx] = res.template;
+  } finally {
+    templateSaving[type] = false;
+  }
+}
+
+// ---- Команда бизнеса ----
+import type { OwnedMember } from "../../../composables/useTimioAuthApi";
+
+const members = ref<OwnedMember[]>([]);
+const membersStatus = ref<"idle" | "loading" | "ready" | "error">("idle");
+const newMemberEmail = ref("");
+const newMemberRole = ref<"administrator" | "manager" | "employee">("employee");
+const addingMember = ref(false);
+const memberError = ref("");
+
+async function loadMembers() {
+  membersStatus.value = "loading";
+  try {
+    const res = await api.listMembers(businessId);
+    members.value = res.members;
+    membersStatus.value = "ready";
+  } catch {
+    membersStatus.value = "error";
+  }
+}
+
+async function addMember() {
+  if (!newMemberEmail.value.trim()) return;
+  memberError.value = "";
+  addingMember.value = true;
+  try {
+    const res = await api.addMember(businessId, newMemberEmail.value.trim(), newMemberRole.value);
+    members.value.push(res.member);
+    newMemberEmail.value = "";
+  } catch (e: any) {
+    memberError.value = e?.message ?? "Не удалось добавить участника";
+  } finally {
+    addingMember.value = false;
+  }
+}
+
+async function removeMember(memberId: string) {
+  await api.removeMember(businessId, memberId);
+  members.value = members.value.filter((m) => m.id !== memberId);
+}
+
+// ---- CRM: полная карточка клиента ----
+import type { OwnedClientCard } from "../../../composables/useTimioAuthApi";
+
+const clientCard = ref<OwnedClientCard | null>(null);
+const clientCardLoading = ref(false);
+// Черновик тегов и заметок для редактирования
+const clientCrmDraft = reactive<{ tags: string[]; notes: string[]; saving: boolean }>({
+  tags: [],
+  notes: [],
+  saving: false,
+});
+const newTag = ref("");
+const newNote = ref("");
+
+// Заменяем старый openClientDetail — теперь грузим с сервера
+async function openClientDetail(clientId?: string) {
+  if (!clientId) return;
+  selectedClientId.value = clientId;
+  clientCard.value = null;
+  clientCardLoading.value = true;
+  try {
+    const res = await api.getClientCard(businessId, clientId);
+    clientCard.value = res;
+    clientCrmDraft.tags = [...res.client.tags];
+    clientCrmDraft.notes = [...res.client.notes];
+  } finally {
+    clientCardLoading.value = false;
+  }
+}
+
+function addTag() {
+  const t = newTag.value.trim();
+  if (t && !clientCrmDraft.tags.includes(t)) clientCrmDraft.tags.push(t);
+  newTag.value = "";
+}
+function removeTag(tag: string) {
+  clientCrmDraft.tags = clientCrmDraft.tags.filter((t) => t !== tag);
+}
+function addNote() {
+  const n = newNote.value.trim();
+  if (n) clientCrmDraft.notes.push(n);
+  newNote.value = "";
+}
+function removeNote(idx: number) {
+  clientCrmDraft.notes.splice(idx, 1);
+}
+
+async function saveClientCrm() {
+  if (!selectedClientId.value) return;
+  clientCrmDraft.saving = true;
+  try {
+    const res = await api.updateClientCrm(businessId, selectedClientId.value, {
+      tags: clientCrmDraft.tags,
+      notes: clientCrmDraft.notes,
+    });
+    if (clientCard.value) clientCard.value.client = res.client;
+  } finally {
+    clientCrmDraft.saving = false;
+  }
+}
+
 
 // ---- Услуги ----
 const newServiceName = ref("");
@@ -248,6 +398,95 @@ async function saveStaffSchedule(member: OwnedStaff) {
     draft.saving = false;
   }
 }
+
+// ---- Маркетинговые рассылки ----
+  import type { Campaign, CampaignFilters, CampaignSegment } from "../../../composables/useTimioAuthApi";
+
+  const campaignsList = ref<Campaign[]>([]);
+  const campaignsStatus = ref<"idle" | "loading" | "ready" | "error">("idle");
+
+  const campaignDraft = reactive<{
+    name: string;
+    message: string;
+    filters: CampaignFilters;
+  }>({
+    name: "",
+    message: "",
+    filters: { segment: "all" },
+  });
+
+  const campaignPreview = ref<{ count: number; sample: { id: string; name: string }[] } | null>(null);
+  const previewLoading = ref(false);
+  const campaignSending = ref(false);
+  const campaignError = ref("");
+  const campaignSuccess = ref("");
+
+  const segmentLabels: Record<CampaignSegment, string> = {
+    all: "Все клиенты",
+    inactive: "Давно не приходили",
+    by_tag: "По тегу",
+    top_clients: "Постоянные клиенты",
+    new_clients: "Новые клиенты (1–2 визита)",
+  };
+
+  // Уникальные теги всех клиентов - для выпадающего списка в фильтре by_tag
+  const allClientTags = computed(() => {
+    // clients уже загружены в loadAll, но если нет - пустой массив
+    const tagSet = new Set<string>();
+    // Используем appointments для получения clientId-ов, но теги нам нужны из CRM.
+    // Простое решение: запрашиваем /clients один раз при открытии таба.
+    return [...tagSet];
+  });
+
+  async function loadCampaigns() {
+    campaignsStatus.value = "loading";
+    try {
+      const res = await api.listCampaigns(businessId);
+      campaignsList.value = res.campaigns;
+      campaignsStatus.value = "ready";
+    } catch {
+      campaignsStatus.value = "error";
+    }
+  }
+
+  async function previewCampaign() {
+    campaignPreview.value = null;
+    previewLoading.value = true;
+    try {
+      campaignPreview.value = await api.previewCampaign(businessId, campaignDraft.filters);
+    } finally {
+      previewLoading.value = false;
+    }
+  }
+
+  async function sendCampaign() {
+    if (!campaignDraft.name.trim() || !campaignDraft.message.trim()) return;
+    campaignError.value = "";
+    campaignSuccess.value = "";
+    campaignSending.value = true;
+    try {
+      const res = await api.sendCampaign(businessId, {
+        name: campaignDraft.name,
+        message: campaignDraft.message,
+        filters: campaignDraft.filters,
+      });
+      campaignsList.value.unshift(res.campaign);
+      campaignSuccess.value = `Отправлено: ${res.result.sent} из ${res.result.total}`;
+      // Сбрасываем форму
+      campaignDraft.name = "";
+      campaignDraft.message = "";
+      campaignDraft.filters = { segment: "all" };
+      campaignPreview.value = null;
+    } catch (e: any) {
+      campaignError.value = e?.message ?? "Не удалось отправить рассылку";
+    } finally {
+      campaignSending.value = false;
+    }
+  }
+
+  function formatCampaignStatus(status: string) {
+    return { sending: "Отправляется…", sent: "Отправлена", failed: "Ошибка" }[status] ?? status;
+  }
 
 // ---- Настройки бизнеса ----
 const businessDraft = reactive({ timezone: "", taxPercent: 0, workingHours: emptyWeek(), savingSettings: false });
@@ -430,6 +669,9 @@ function openTab(t: Tab) {
     loadTelegramStatus();
   }
   if (t === "billing" && billingStatus.value === "idle") loadBilling();
+  if (t === "templates" && templatesStatus.value === "idle") loadTemplates(); 
+  if (t === "team" && membersStatus.value === "idle") loadMembers(); 
+  if (t === "campaigns" && campaignsStatus.value === "idle") loadCampaigns();       
 }
 
 function exportXlsx() {
@@ -467,6 +709,9 @@ function logout() {
       <a class="sidebar-nav-item" :class="{ active: tab === 'staff' }" @click="openTab('staff')"><span class="nav-icon">◍</span> Сотрудники</a>
       <a class="sidebar-nav-item" :class="{ active: tab === 'analytics' }" @click="openTab('analytics')"><span class="nav-icon">▲</span> Аналитика</a>
       <a class="sidebar-nav-item" :class="{ active: tab === 'billing' }" @click="openTab('billing')"><span class="nav-icon">◈</span> Подписка</a>
+      <a class="sidebar-nav-item" :class="{ active: tab === 'templates' }" @click="openTab('templates')"><span class="nav-icon">✉</span> Шаблоны</a>
+      <a class="sidebar-nav-item" :class="{ active: tab === 'team' }" @click="openTab('team')"><span class="nav-icon">◎</span> Команда</a>
+      <a class="sidebar-nav-item" :class="{ active: tab === 'campaigns' }" @click="openTab('campaigns')"><span class="nav-icon">📣</span> Рассылки</a>
       <a class="sidebar-nav-item" :class="{ active: tab === 'settings' }" @click="openTab('settings')"><span class="nav-icon">⚙</span> Настройки</a>
       <div style="flex: 1" />
       <a class="sidebar-nav-item" @click="logout"><span class="nav-icon">←</span> Выйти</a>
@@ -699,6 +944,44 @@ function logout() {
           </div>
         </div>
 
+                <!-- Шаблоны уведомлений -->
+        <div v-else-if="tab === 'templates'">
+          <div v-if="templatesStatus === 'loading'" class="text-dim">Загрузка…</div>
+          <div v-else-if="templatesStatus === 'error'" class="error-banner">Не удалось загрузить шаблоны.</div>
+
+          <template v-else>
+            <p class="page-subtitle" style="margin-bottom:6px;font-weight:700;color:var(--text)">Шаблоны уведомлений</p>
+            <p class="helper-text" style="margin-bottom:20px">
+              Доступные переменные: <code>{{clientName}}</code>, <code>{{serviceName}}</code>,
+              <code>{{staffName}}</code>, <code>{{date}}</code>, <code>{{time}}</code>
+            </p>
+
+            <div v-for="tmpl in templates" :key="tmpl.type" class="panel" style="margin-bottom:14px">
+              <p class="field-label" style="margin-bottom:12px">{{ tmpl.type }}</p>
+
+              <div v-for="locale in LOCALES" :key="locale" class="field" style="margin-bottom:8px">
+                <label class="field-label" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">
+                  {{ locale }}
+                </label>
+                <textarea
+                  v-model="templateDrafts[tmpl.type][locale]"
+                  rows="2"
+                  style="width:100%;resize:vertical;font-size:13px"
+                />
+              </div>
+
+              <button
+                class="btn-secondary"
+                style="margin-top:8px"
+                :disabled="templateSaving[tmpl.type]"
+                @click="saveTemplate(tmpl.type)"
+              >
+                {{ templateSaving[tmpl.type] ? "…" : "Сохранить" }}
+              </button>
+            </div>
+          </template>
+        </div>
+
         <!-- Аналитика -->
         <div v-else-if="tab === 'analytics'">
           <div v-if="analyticsStatus === 'loading'" class="text-dim">Считаем…</div>
@@ -766,6 +1049,54 @@ function logout() {
           </template>
         </div>
 
+                <!-- Команда бизнеса -->
+        <div v-else-if="tab === 'team'">
+          <div class="panel" style="max-width:480px; margin-bottom:20px">
+            <p class="field-label" style="margin-bottom:12px">Добавить участника</p>
+            <p class="helper-text" style="margin-bottom:12px">
+              Пользователь должен быть уже зарегистрирован в Timio.
+            </p>
+            <div v-if="memberError" class="error-banner">{{ memberError }}</div>
+            <div class="field">
+              <label class="field-label">Email</label>
+              <input v-model="newMemberEmail" type="email" placeholder="colleague@example.com" />
+            </div>
+            <div class="field">
+              <label class="field-label">Роль</label>
+              <select v-model="newMemberRole">
+                <option value="administrator">Администратор</option>
+                <option value="manager">Менеджер</option>
+                <option value="employee">Сотрудник</option>
+              </select>
+            </div>
+            <button class="btn-secondary" :disabled="addingMember" @click="addMember">
+              {{ addingMember ? "…" : "+ Добавить" }}
+            </button>
+          </div>
+
+          <div v-if="membersStatus === 'loading'" class="text-dim">Загрузка…</div>
+          <div v-else-if="membersStatus === 'error'" class="error-banner">Не удалось загрузить команду.</div>
+          <div v-else>
+            <div v-for="m in members" :key="m.id" class="data-row">
+              <div style="display:flex; align-items:center; gap:12px">
+                <span class="avatar-circle" style="background:var(--accent)">{{ initials(m.name) }}</span>
+                <div>
+                  <div style="font-weight:600; font-size:14px">{{ m.name }}</div>
+                  <div class="text-dim text-xs">{{ m.email }}</div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px">
+                <span class="badge">{{ m.role }}</span>
+                <button
+                  v-if="m.role !== 'owner'"
+                  class="btn-danger-text"
+                  @click="removeMember(m.id)"
+                >Удалить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Подписка -->
         <div v-else-if="tab === 'billing'">
           <div v-if="billingStatus === 'loading'" class="text-dim">Загрузка…</div>
@@ -782,14 +1113,14 @@ function logout() {
                   <input type="radio" value="basic" v-model="selectedPlan" style="margin-right: 10px; width: auto" />
                   <div>
                     <div style="font-weight: 700">Базовый</div>
-                    <div class="text-dim text-xs">До 5 сотрудников · 1490 ₽/мес</div>
+                    <div class="text-dim text-xs">До 3 сотрудников · 1990 ₽/мес</div>
                   </div>
                 </label>
                 <label class="option" style="cursor: pointer">
                   <input type="radio" value="business" v-model="selectedPlan" style="margin-right: 10px; width: auto" />
                   <div>
                     <div style="font-weight: 700">Бизнес</div>
-                    <div class="text-dim text-xs">2490 ₽/мес + 390 ₽ за каждого сотрудника сверх 5</div>
+                    <div class="text-dim text-xs">3190 ₽/мес + 390 ₽ за каждого сотрудника сверх 3</div>
                   </div>
                 </label>
               </div>
@@ -869,6 +1200,151 @@ function logout() {
           </template>
         </div>
 
+        <!-- Маркетинговые рассылки -->
+<div v-else-if="tab === 'campaigns'">
+
+  <!-- Форма новой рассылки -->
+  <div class="panel" style="max-width: 560px; margin-bottom: 24px">
+    <p class="field-label" style="margin-bottom: 14px">Новая рассылка</p>
+
+    <div v-if="campaignError" class="error-banner">{{ campaignError }}</div>
+    <div v-if="campaignSuccess" class="helper-text" style="color: var(--success); margin-bottom: 12px">
+      ✓ {{ campaignSuccess }}
+    </div>
+
+    <!-- Название -->
+    <div class="field">
+      <label class="field-label">Название (для истории)</label>
+      <input v-model="campaignDraft.name" type="text" placeholder="Акция май, возврат клиентов…" />
+    </div>
+
+    <!-- Сегмент -->
+    <div class="field">
+      <label class="field-label">Кому отправить</label>
+      <select v-model="campaignDraft.filters.segment" @change="campaignPreview = null">
+        <option v-for="(label, seg) in segmentLabels" :key="seg" :value="seg">{{ label }}</option>
+      </select>
+    </div>
+
+    <!-- Доп. параметры сегмента -->
+    <div v-if="campaignDraft.filters.segment === 'inactive'" class="field">
+      <label class="field-label">Не приходили более (дней)</label>
+      <input
+        v-model.number="campaignDraft.filters.inactiveDays"
+        type="number"
+        min="7"
+        step="1"
+        style="max-width: 120px"
+        placeholder="30"
+        @change="campaignPreview = null"
+      />
+    </div>
+
+    <div v-if="campaignDraft.filters.segment === 'by_tag'" class="field">
+      <label class="field-label">Тег</label>
+      <input
+        v-model="campaignDraft.filters.tag"
+        type="text"
+        placeholder="vip, скидка…"
+        @change="campaignPreview = null"
+      />
+    </div>
+
+    <div v-if="campaignDraft.filters.segment === 'top_clients'" class="field">
+      <label class="field-label">Минимум визитов</label>
+      <input
+        v-model.number="campaignDraft.filters.visitsGte"
+        type="number"
+        min="1"
+        style="max-width: 120px"
+        placeholder="5"
+        @change="campaignPreview = null"
+      />
+    </div>
+
+    <!-- Текст сообщения -->
+    <div class="field">
+      <label class="field-label">Текст сообщения</label>
+      <textarea
+        v-model="campaignDraft.message"
+        rows="4"
+        style="width: 100%; resize: vertical"
+        placeholder="Привет, {{clientName}}! Мы скучаем — возвращайтесь, для вас скидка 10% 🎁"
+      />
+      <p class="helper-text" style="margin-top: 4px">
+        Переменные: <code>{{clientName}}</code>, <code>{{businessName}}</code>
+      </p>
+    </div>
+
+    <!-- Превью получателей -->
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px">
+      <button class="btn-secondary" :disabled="previewLoading" @click="previewCampaign">
+        {{ previewLoading ? "…" : "Посмотреть получателей" }}
+      </button>
+      <span v-if="campaignPreview" class="text-dim" style="font-size: 13px">
+        Получат:
+        <b style="color: var(--text)">{{ campaignPreview.count }}</b> клиентов
+        <template v-if="campaignPreview.sample.length">
+          ({{ campaignPreview.sample.map(s => s.name).join(", ") }}{{ campaignPreview.count > 5 ? "…" : "" }})
+        </template>
+        <template v-else-if="campaignPreview.count === 0">
+          — никто не попал в выборку
+        </template>
+      </span>
+    </div>
+
+    <button
+      class="btn-primary"
+      :disabled="campaignSending || !campaignDraft.name.trim() || !campaignDraft.message.trim()"
+      @click="sendCampaign"
+    >
+      {{ campaignSending ? "Отправляем…" : "Отправить рассылку" }}
+    </button>
+  </div>
+
+    <!-- История рассылок -->
+    <p class="page-subtitle" style="margin-bottom: 12px; font-weight: 700; color: var(--text)">
+      История рассылок
+    </p>
+
+    <div v-if="campaignsStatus === 'loading'" class="text-dim">Загрузка…</div>
+    <div v-else-if="campaignsStatus === 'error'" class="error-banner">Не удалось загрузить историю.</div>
+
+    <div v-else-if="campaignsList.length === 0" class="empty-state panel">
+      <div class="title">Рассылок пока не было</div>
+      <p>Создайте первую рассылку выше — она уйдёт клиентам в Telegram.</p>
+    </div>
+
+    <div v-for="camp in campaignsList" :key="camp.id" class="data-row">
+      <div>
+        <div style="font-weight: 600; font-size: 14px">{{ camp.name }}</div>
+        <div class="text-dim text-xs">
+          {{ segmentLabels[camp.filters.segment as CampaignSegment] }} ·
+          {{ camp.sentAt ? formatDateTime(camp.sentAt) : "—" }}
+        </div>
+        <div class="text-dim text-xs" style="margin-top: 2px; font-style: italic">
+          {{ camp.message.slice(0, 60) }}{{ camp.message.length > 60 ? "…" : "" }}
+        </div>
+      </div>
+      <div style="text-align: right">
+        <span
+          class="badge"
+          :style="camp.status === 'sent'
+            ? 'background:var(--success-dim);color:var(--success)'
+            : camp.status === 'failed'
+            ? 'background:var(--danger-dim);color:var(--danger)'
+            : ''"
+        >
+          {{ formatCampaignStatus(camp.status) }}
+        </span>
+        <div class="text-dim text-xs" style="margin-top: 4px">
+          {{ camp.sentCount }} / {{ camp.recipientCount }} доставлено
+        </div>
+      </div>
+    </div>
+
+  </div>
+
         <!-- Настройки -->
         <div v-else-if="tab === 'settings'">
           <div class="panel" style="max-width: 480px; margin-bottom: 20px">
@@ -926,6 +1402,80 @@ function logout() {
       </template>
     </main>
 
+    <!-- CRM: полная карточка клиента -->
+    <Modal v-if="selectedClientId" :title="clientCard?.client.name ?? '…'" @close="selectedClientId = null">
+      <div v-if="clientCardLoading" class="text-dim" style="padding:20px 0">Загрузка…</div>
+
+      <template v-else-if="clientCard">
+        <!-- Контакты -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px">
+          <div class="stat-card" style="padding:10px">
+            <div class="stat-label">Визитов</div>
+            <div class="stat-value" style="font-size:20px">{{ clientCard.client.visits }}</div>
+          </div>
+          <div class="stat-card" style="padding:10px">
+            <div class="stat-label">Потрачено</div>
+            <div class="stat-value" style="font-size:20px">{{ formatMoney(clientCard.client.totalSpentCents) }}</div>
+          </div>
+        </div>
+
+        <div class="text-dim text-xs" style="margin-bottom:16px">
+          <span v-if="clientCard.client.phone">📞 {{ clientCard.client.phone }} &nbsp;</span>
+          <span v-if="clientCard.client.email">✉ {{ clientCard.client.email }} &nbsp;</span>
+          <span v-if="clientCard.client.telegramChatId">✈ Telegram подключён &nbsp;</span>
+          <span>🌐 {{ clientCard.client.detectedLocale }}</span>
+        </div>
+
+        <!-- Теги -->
+        <div style="margin-bottom:16px">
+          <p class="field-label" style="margin-bottom:8px">Теги</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px">
+            <span
+              v-for="tag in clientCrmDraft.tags" :key="tag"
+              class="badge"
+              style="cursor:pointer"
+              @click="removeTag(tag)"
+            >{{ tag }} ✕</span>
+          </div>
+          <div style="display:flex; gap:8px">
+            <input v-model="newTag" type="text" placeholder="Новый тег" style="flex:1" @keydown.enter="addTag" />
+            <button class="btn-secondary" @click="addTag">+</button>
+          </div>
+        </div>
+
+        <!-- Заметки -->
+        <div style="margin-bottom:16px">
+          <p class="field-label" style="margin-bottom:8px">Заметки</p>
+          <div v-for="(note, idx) in clientCrmDraft.notes" :key="idx" class="data-row" style="padding:6px 0">
+            <span style="font-size:13px">{{ note }}</span>
+            <button class="btn-danger-text" @click="removeNote(idx)">✕</button>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:8px">
+            <input v-model="newNote" type="text" placeholder="Добавить заметку" style="flex:1" @keydown.enter="addNote" />
+            <button class="btn-secondary" @click="addNote">+</button>
+          </div>
+        </div>
+
+        <button class="btn-primary" :disabled="clientCrmDraft.saving" @click="saveClientCrm" style="margin-bottom:20px">
+          {{ clientCrmDraft.saving ? "…" : "Сохранить CRM" }}
+        </button>
+
+        <!-- История записей -->
+        <p class="field-label" style="margin-bottom:10px">История записей</p>
+        <div v-if="clientCard.appointments.length === 0" class="text-dim text-xs">Нет записей</div>
+        <div v-for="a in clientCard.appointments" :key="a.id" class="data-row">
+          <div>
+            <div style="font-weight:600; font-size:14px">{{ a.serviceName }}</div>
+            <div class="text-dim text-xs">{{ a.staffName }} · {{ formatDateTime(a.startAt) }}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge" :class="`status-${a.status}`">{{ a.status }}</span>
+            <span class="mono text-dim text-xs">{{ formatMoney(a.priceCents, a.currency) }}</span>
+          </div>
+        </div>
+      </template>
+    </Modal>
+
     <!-- История визитов клиента -->
     <Modal v-if="selectedClientId" :title="selectedClientName" @close="selectedClientId = null">
       <div class="flex-between mt-4" style="margin-bottom: 16px">
@@ -938,6 +1488,21 @@ function logout() {
           <div class="text-dim text-xs">{{ a.staffName }} · {{ formatDateTime(a.startAt) }}</div>
         </div>
         <span class="badge" :class="`status-${a.status}`">{{ a.status }}</span>
+        <select
+          :value="a.status"
+          style="font-size:11px; padding:2px 4px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text)"
+          @change="changeAppointmentStatus(a.id, ($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <select
+          :value="a.status"
+          class="text-xs"
+          style="font-size:11px; padding:2px 4px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text)"
+          @change="changeAppointmentStatus(a.id, ($event.target as HTMLSelectElement).value)"
+        >
+      <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
+    </select>
       </div>
     </Modal>
 

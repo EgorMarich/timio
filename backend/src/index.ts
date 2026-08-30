@@ -13,6 +13,7 @@ import { telegramWebhookRoutes, telegramSettingsRoutes } from "./modules/telegra
 import { startReminderWorker } from "./modules/notifications/reminderWorker.js";
 // Защита от "invalid syntax for uuid: undefined" - см. подробный комментарий в файле.
 import { requireUuidParams } from "./modules/validateParams.js";
+import { startWaitlistWorker } from './modules/waitlist/waitlistWorker.js'
 
 const app = new Hono<{ Variables: { userId: string; email: string } }>();
 
@@ -61,3 +62,4 @@ startSubscriptionCron();
 // Фоновая обработка очереди напоминаний о записи (см. reminderWorker.ts) -
 // без этого напоминания складывались в Redis, но никогда не отправлялись.
 startReminderWorker();
+startWaitlistWorker();

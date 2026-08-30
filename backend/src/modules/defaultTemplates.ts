@@ -32,4 +32,16 @@ export const defaultTemplates: Record<string, Record<string, string>> = {
     kk: "Келгеніңізге рахмет, {{clientName}}! Сізді қайта көруге қуаныштымыз.",
     hy: "Շնորհակալություն այցի համար, {{clientName}}: Կուրախանանք նորից տեսնել ձեզ:",
   },
+  'waitlist.invite': {
+  ru: 'Освободилось место {{start}}–{{end}} для {{service}}. Подтвердите по ссылке: {{link}} (действительно {{ttlMin}} мин).',
+  en: 'A spot opened up {{start}}–{{end}} for {{service}}. Confirm here: {{link}} (valid for {{ttlMin}} min).',
+  },
+  'waitlist.expired': {
+    ru: 'Время подтверждения места {{start}}–{{end}} для {{service}} истекло. Вы остаётесь в очереди.',
+    en: 'Your confirmation link for {{start}}–{{end}} ({{service}}) has expired. You remain in the waitlist.',
+  },
+  'waitlist.confirmed': {
+    ru: 'Вы подтвердили запись {{start}}–{{end}} на {{service}}. Ждём вас!',
+    en: 'You confirmed your appointment {{start}}–{{end}} for {{service}}. See you soon!',
+  },
 };
